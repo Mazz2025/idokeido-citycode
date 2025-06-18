@@ -149,7 +149,31 @@
         // --- マスターデータのURLを指定 (ここをあなたのRaw URLに置き換える必要があります！) ---
         // 例: 'https://raw.githubusercontent.com/your-username/your-repo/main/municipal_codes.csv'
         // GitHubにアップロードした municipal_codes.csv の「Raw」ボタンをクリックして表示されるURLを正確に貼り付けてください。
-        const masterDataUrl = 'https://raw.githubusercontent.com/Mazz2025/idokeido-citycode/refs/heads/main/city-codes.csv'; 
+        const masterDataUrl = 'YOUR_RAW_MASTER_DATA_CSV_URL_HERE'; 
+
+        // --- 出力CSVファイルの最終的なヘッダー順とマッピング ---
+        const OUTPUT_HEADERS = [
+            '企業コード', '店舗コード', 'ロケール', '店舗名(漢字)', '店舗名(カナ)', '請求先コード1',
+            '請求先コード2', '使用不可フラグ', '郵便番号', '市区町村コード', 'L2コード', '国交省住所1',
+            '国交省住所2', '国交省住所補足', '住所1', '住所2', '住所3', '電話番号', 'FAX番号',
+            '担当部門', '担当者役職', '担当者名', '担当者MAIL', '代表業態コード', '業態中分類コード',
+            '旧業態コード', '旧業態中分類コード', '顧客側店舗コード', '管轄DOコード', '緯度', '経度',
+            '鉄道最寄駅', 'バス最寄駅', '添付ファイルコード', 'ファイル名', 'ファイルアップロード日',
+            'SEJDO名', '免許品', '実績年月日1', '実績作業量1', '実績年月日2', '実績作業量2',
+            '実績年月日3', '実績作業量3', '登録日時', '登録ユーザID', '更新日時', '更新ユーザID'
+        ];
+
+        // --- 入力CSVと出力CSVのマッピング (特定の変換が必要なもののみ) ---
+        // key: 出力ヘッダー名, value: 入力CSVのヘッダー名または特殊な処理
+        const INPUT_TO_OUTPUT_MAPPING = {
+            '企業名': 'クライアント名', // 'クライアント名'は'企業名'として最初の列に出力
+            '店舗名(漢字)': '店舗名',
+            '店舗名(カナ)': 'フリガナ', // 半角カタカナ変換＋PMK付加
+            '郵便番号': '郵便番号',
+            '国交省住所1': '住所', // GSI APIのproperties.titleから取得
+            '顧客側店舗コード': '顧客店番'
+        };
+
 
         // アプリ起動時にマスターデータを読み込む
         window.onload = async () => {
@@ -350,6 +374,27 @@
             return normalizedAddress;
         }
 
+        /**
+         * 全角カタカナを半角カタカナに変換する関数
+         * @param {string} str - 変換する文字列
+         * @returns {string} 半角カタカナに変換された文字列
+         */
+        function toHalfWidthKatakana(str) {
+            if (!str) return '';
+            return str.replace(/[\u30a1-\u30f6]/g, function(match) {
+                var chr = match.charCodeAt(0) - 0x60;
+                return String.fromCharCode(chr);
+            }).replace(/ヴ/g, 'ｳﾞ') // ヴ
+              .replace(/ガ/g, 'ｶﾞ').replace(/ギ/g, 'ｷﾞ').replace(/グ/g, 'ｸﾞ').replace(/ゲ/g, 'ｹﾞ').replace(/ゴ/g, 'ｺﾞ')
+              .replace(/ザ/g, 'ｻﾞ').replace(/ジ/g, 'ｼﾞ').replace(/ズ/g, 'ｽﾞ').replace(/ゼ/g, 'ｾﾞ').replace(/ゾ/g, 'ｿﾞ')
+              .replace(/ダ/g, 'ﾀﾞ').replace(/ヂ/g, 'ﾁﾞ').replace(/ヅ/g, 'ﾂﾞ').replace(/デ/g, 'ﾃﾞ').replace(/ド/g, 'ﾄﾞ')
+              .replace(/バ/g, 'ﾊﾞ').replace(/ビ/g, 'ﾋﾞ').replace(/ブ/g, 'ﾌﾞ').replace(/ベ/g, 'ﾍﾞ').replace(/ボ/g, 'ﾎﾞ')
+              .replace(/パ/g, 'ﾊﾟ').replace(/ピ/g, 'ﾋﾟ').replace(/プ/g, 'ﾌﾟ').replace(/ペ/g, 'ﾍﾟ').replace(/ポ/g, 'ﾎﾟ')
+              .replace(/ァ/g, 'ｧ').replace(/ィ/g, 'ｨ').replace(/ゥ/g, 'ｩ').replace(/ェ/g, 'ｪ').replace(/ォ/g, 'ｫ')
+              .replace(/ャ/g, 'ｬ').replace(/ュ/g, 'ｭ').replace(/ョ/g, 'ｮ').replace(/ッ/g, 'ｯ')
+              .replace(/ー/g, 'ｰ'); // 長音符
+        }
+
 
         // 都道府県名と市区町村名のみを抽出するヘルパー関数
         function getPrefCityWardForLookup(fullAddress) {
@@ -378,9 +423,9 @@
 
 
         // 国土地理院のAPIで緯度経度を取得する関数
-        async function getLatLonFromGSI(address) {
+        async function getLatLonAndGSIAddressTitle(address) {
             if (!address) {
-                return { latitude: '', longitude: '' };
+                return { latitude: '', longitude: '', gsiAddressTitle: '' };
             }
 
             const encodedAddress = encodeURIComponent(address);
@@ -393,20 +438,21 @@
 
                 if (!response.ok) {
                     console.error(`国土地理院APIリクエスト失敗: ${response.status} ${response.statusText} for address: ${address}`);
-                    return { latitude: 'エラー', longitude: 'エラー' };
+                    return { latitude: 'エラー', longitude: 'エラー', gsiAddressTitle: 'エラー' };
                 }
 
                 if (data && data.length > 0 && data[0].geometry && data[0].geometry.coordinates) {
                     const longitude = data[0].geometry.coordinates[0];
                     const latitude = data[0].geometry.coordinates[1];
-                    return { latitude, longitude };
+                    const gsiAddressTitle = data[0].properties ? data[0].properties.title : ''; // 国交省住所1用
+                    return { latitude, longitude, gsiAddressTitle };
                 } else {
-                    console.warn(`住所 "${address}" の緯度経度が見つかりませんでした（国土地理院APIレスポンスデータ不足）。`);
-                    return { latitude: '見つかりません', longitude: '見つかりません' };
+                    console.warn(`住所 "${address}" の緯度経度または国交省住所が見つかりませんでした（国土地理院APIレスポンスデータ不足）。`);
+                    return { latitude: '見つかりません', longitude: '見つかりません', gsiAddressTitle: '見つかりません' };
                 }
             } catch (error) {
-                console.error(`住所 "${address}" の国土地理院APIからの緯度経度取得中にエラーが発生しました:`, error);
-                return { latitude: 'エラー', longitude: 'エラー' };
+                console.error(`住所 "${address}" の国土地理院APIからの緯度経度・コード取得中にエラーが発生しました:`, error);
+                return { latitude: 'エラー', longitude: 'エラー', gsiAddressTitle: 'エラー' };
             }
         }
 
@@ -464,55 +510,76 @@
                 return;
             }
 
+            // 入力CSVの必須ヘッダーを確認
+            const requiredInputHeaders = [
+                'クライアント名', '店舗名', 'フリガナ', '郵便番号', '住所', '顧客店番'
+            ];
+            const missingInputHeaders = requiredInputHeaders.filter(header => !headers.includes(header));
+            if (missingInputHeaders.length > 0) {
+                showMessage(`入力CSVに必要な列が不足しています: ${missingInputHeaders.join(', ')}`, 'error');
+                return;
+            }
+
+
             geocodeButton.disabled = true;
             downloadCsvButton.disabled = true;
             showMessage('緯度経度と市区町村コードを取得中です...（時間がかかる場合があります）', 'info');
             updateProgressBar(0);
 
             resultData = [];
+            resultData.push(OUTPUT_HEADERS.join(',')); // 出力ヘッダー行を追加
+
             const totalAddresses = parsedData.length;
             let processedCount = 0;
 
-            // 新しいヘッダーを作成
-            const newHeaders = [...headers];
-            if (!newHeaders.includes('緯度')) {
-                newHeaders.push('緯度');
-            }
-            if (!newHeaders.includes('経度')) {
-                newHeaders.push('経度');
-            }
-            // 市区町村コードの列を追加
-            if (!newHeaders.includes('市区町村コード')) {
-                newHeaders.push('市区町村コード');
-            }
-            resultData.push(newHeaders.join(',')); // ヘッダー行を追加
-
             for (let i = 0; i < totalAddresses; i++) {
                 const row = parsedData[i];
-                const address = row[addressColumnName];
-                
-                // 国土地理院APIから緯度経度を取得
-                const { latitude, longitude } = await getLatLonFromGSI(address);
+                const inputAddress = row[addressColumnName]; // ジオコーディングに使用する元の住所
+
+                // 住所のハイフン表記を変換
+                const normalizedAddress = normalizeAddressHyphens(inputAddress);
+                console.log(`元の住所: "${inputAddress}" -> 変換後住所: "${normalizedAddress}"`);
+
+                // 国土地理院APIから緯度経度と国交省住所1を取得
+                const { latitude, longitude, gsiAddressTitle } = await getLatLonAndGSIAddressTitle(normalizedAddress);
                 
                 // マスターデータから市区町村コードを取得
-                const municipalCode = getMunicipalCodeFromMaster(address);
-                
-                // 既存の行データに緯度経度と市区町村コードを追加
-                const newRow = { ...row };
-                newRow['緯度'] = latitude;
-                newRow['経度'] = longitude;
-                newRow['市区町村コード'] = municipalCode;
+                const municipalCode = getMunicipalCodeFromMaster(inputAddress); // マスター検索は元の住所で
 
-                // 新しいヘッダーの順番に合わせて値を取得
-                const rowValues = newHeaders.map(header => {
-                    const value = newRow[header];
-                    // CSVの値を適切にエスケープ（カンマや引用符を含む場合）
+                // --- 新しい出力行のデータを構築 ---
+                const outputRowValues = {};
+
+                // OUTPUT_HEADERSの順に値を設定
+                for (const header of OUTPUT_HEADERS) {
+                    outputRowValues[header] = ''; // まず全て空で初期化
+                }
+
+                // マッピングと変換
+                outputRowValues['企業名'] = row[INPUT_TO_OUTPUT_MAPPING['企業名']] || '';
+                outputRowValues['店舗名(漢字)'] = row[INPUT_TO_OUTPUT_MAPPING['店舗名(漢字)']] || '';
+                
+                const furigana = row[INPUT_TO_OUTPUT_MAPPING['店舗名(カナ)']] || '';
+                outputRowValues['店舗名(カナ)'] = toHalfWidthKatakana(furigana) + 'PMK'; // 半角カタカナ変換＋PMK付加
+                
+                outputRowValues['郵便番号'] = row[INPUT_TO_OUTPUT_MAPPING['郵便番号']] || '';
+                outputRowValues['国交省住所1'] = gsiAddressTitle; // 国交省住所1はAPIから取得した整形済み住所
+                outputRowValues['顧客側店舗コード'] = row[INPUT_TO_OUTPUT_MAPPING['顧客側店舗コード']] || '';
+                
+                outputRowValues['緯度'] = latitude;
+                outputRowValues['経度'] = longitude;
+                outputRowValues['市区町村コード'] = municipalCode;
+
+                // CSV形式に変換してresultDataに追加
+                const csvRow = OUTPUT_HEADERS.map(header => {
+                    const value = outputRowValues[header];
+                    // CSVの値を適切にエスケープ（カンマや引用符、改行を含む場合）
                     if (typeof value === 'string' && (value.includes(',') || value.includes('"') || value.includes('\n') || value.includes('\r'))) {
                         return `"${value.replace(/"/g, '""')}"`;
                     }
                     return value;
-                });
-                resultData.push(rowValues.join(','));
+                }).join(',');
+                resultData.push(csvRow);
+
 
                 processedCount++;
                 const progress = (processedCount / totalAddresses) * 100;
@@ -541,7 +608,7 @@
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = '住所_緯度経度_コード変換済み.csv';
+            a.download = 'データ_変換済み.csv'; // ダウンロードファイル名を変更
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
