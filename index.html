@@ -586,7 +586,8 @@
                 updateProgressBar(progress);
 
                 // APIへの負荷を軽減するため、少し待つ (緯度経度取得のため)
-                await new Promise(resolve => setTimeout(resolve, 100)); // 100ミリ秒待機
+                // この行を削除することで速度が向上します
+                // await new Promise(resolve => setTimeout(resolve, 100)); // 100ミリ秒待機
             }
 
             showMessage('緯度経度と市区町村コードの取得が完了しました！', 'success');
